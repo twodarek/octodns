@@ -145,6 +145,58 @@ class DsValueRfcValidator(ValueValidator):
         return reasons
 
 
+class DsValueBestPracticeValidator(ValueValidator):
+    '''
+    Checks DS records against deprecated algorithms and digest types per
+    RFC 8624.
+
+    - ``digest_type`` 1 (SHA-1) is NOT RECOMMENDED (§3.3); use
+      digest_type 2 (SHA-256).
+    - Signing ``algorithm`` values 1 (RSA/MD5), 3 (DSA/SHA1),
+      5 (RSA/SHA-1), 6 (DSA-NSEC3-SHA1), and 7 (RSASHA1-NSEC3-SHA1)
+      are deprecated (§3.1).
+
+    Enabled as part of the ``best-practice`` validator set::
+
+      manager:
+        enabled:
+          - best-practice
+    '''
+
+    _deprecated_algorithms = {
+        1: 'RSA/MD5',
+        3: 'DSA/SHA1',
+        5: 'RSA/SHA-1',
+        6: 'DSA-NSEC3-SHA1',
+        7: 'RSASHA1-NSEC3-SHA1',
+    }
+
+    def validate(self, value_cls, data, _type):
+        reasons = []
+        for value in data:
+            if 'public_key' in value or 'flags' in value:
+                continue
+            try:
+                algorithm = int(value['algorithm'])
+                if algorithm in self._deprecated_algorithms:
+                    name = self._deprecated_algorithms[algorithm]
+                    reasons.append(
+                        f'DS algorithm {algorithm} ({name}) is deprecated per RFC 8624'
+                    )
+            except (KeyError, ValueError, TypeError):
+                pass
+            try:
+                digest_type = int(value['digest_type'])
+                if digest_type == 1:
+                    reasons.append(
+                        'DS digest_type 1 (SHA-1) is not recommended per RFC 8624; '
+                        'use digest_type 2 (SHA-256)'
+                    )
+            except (KeyError, ValueError, TypeError):
+                pass
+        return reasons
+
+
 class DsValue(EqualityTupleMixin, dict):
     # https://www.rfc-editor.org/rfc/rfc4034.html#section-5.1
     log = getLogger('DsValue')
@@ -152,6 +204,9 @@ class DsValue(EqualityTupleMixin, dict):
     VALIDATORS = [
         DsValueValidator('ds-value', sets={'legacy'}),
         DsValueRfcValidator('ds-value-rfc', sets={'strict'}),
+        DsValueBestPracticeValidator(
+            'ds-value-best-practice', sets={'best-practice'}
+        ),
     ]
 
     @classmethod

@@ -73,12 +73,42 @@ class CaaValueRfcValidator(ValueValidator):
         return reasons
 
 
+class CaaValueBestPracticeValidator(ValueValidator):
+    '''
+    Checks that CAA records include an explicit ``issuewild`` property
+    whenever an ``issue`` property is present.
+
+    Per RFC 8659 §4.2, wildcard certificate issuance falls back to
+    ``issue`` policy when no ``issuewild`` record exists; omitting
+    ``issuewild`` makes the wildcard-issuance policy implicit rather
+    than explicit.
+
+    Enabled as part of the ``best-practice`` validator set::
+
+      manager:
+        enabled:
+          - best-practice
+    '''
+
+    def validate(self, value_cls, data, _type):
+        tags = {v.get('tag') for v in data}
+        if 'issue' in tags and 'issuewild' not in tags:
+            return [
+                'CAA issue tag is present without issuewild; '
+                'add an explicit issuewild to clarify wildcard certificate policy'
+            ]
+        return []
+
+
 class CaaValue(EqualityTupleMixin, dict):
     # https://tools.ietf.org/html/rfc8659
 
     VALIDATORS = [
         CaaValueValidator('caa-value', sets={'legacy'}),
         CaaValueRfcValidator('caa-value-rfc', sets={'strict'}),
+        CaaValueBestPracticeValidator(
+            'caa-value-best-practice', sets={'best-practice'}
+        ),
     ]
 
     @classmethod

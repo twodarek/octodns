@@ -7,7 +7,12 @@ from unittest import TestCase
 from helpers import SimpleProvider
 
 from octodns.record import Record
-from octodns.record.caa import CaaRecord, CaaValue, CaaValueRfcValidator
+from octodns.record.caa import (
+    CaaRecord,
+    CaaValue,
+    CaaValueBestPracticeValidator,
+    CaaValueRfcValidator,
+)
 from octodns.record.exception import ValidationError
 from octodns.record.rr import RrParseError
 from octodns.zone import Zone
@@ -436,6 +441,151 @@ class TestRecordCaa(TestCase):
             )
         finally:
             Record.disable_validator('caa-value-rfc', types=['CAA'])
+
+
+class TestCaaBestPractice(TestCase):
+
+    def test_best_practice_validator(self):
+        validate = CaaValueBestPracticeValidator(
+            'caa-value-best-practice'
+        ).validate
+
+        # both issue and issuewild present — passes
+        self.assertEqual(
+            [],
+            validate(
+                CaaValue,
+                [
+                    {'flags': 0, 'tag': 'issue', 'value': 'letsencrypt.org'},
+                    {
+                        'flags': 0,
+                        'tag': 'issuewild',
+                        'value': 'letsencrypt.org',
+                    },
+                ],
+                'CAA',
+            ),
+        )
+        # issuewild only (no issue) — passes
+        self.assertEqual(
+            [],
+            validate(
+                CaaValue,
+                [{'flags': 0, 'tag': 'issuewild', 'value': 'letsencrypt.org'}],
+                'CAA',
+            ),
+        )
+        # iodef only — passes
+        self.assertEqual(
+            [],
+            validate(
+                CaaValue,
+                [
+                    {
+                        'flags': 128,
+                        'tag': 'iodef',
+                        'value': 'mailto:security@example.com',
+                    }
+                ],
+                'CAA',
+            ),
+        )
+        # issue with prohibition value (";") + no issuewild — still flagged
+        self.assertEqual(
+            [
+                'CAA issue tag is present without issuewild; '
+                'add an explicit issuewild to clarify wildcard certificate policy'
+            ],
+            validate(
+                CaaValue, [{'flags': 0, 'tag': 'issue', 'value': ';'}], 'CAA'
+            ),
+        )
+        # issue without issuewild triggers warning
+        self.assertEqual(
+            [
+                'CAA issue tag is present without issuewild; '
+                'add an explicit issuewild to clarify wildcard certificate policy'
+            ],
+            validate(
+                CaaValue,
+                [{'flags': 0, 'tag': 'issue', 'value': 'letsencrypt.org'}],
+                'CAA',
+            ),
+        )
+        # issue + iodef but no issuewild — warning
+        self.assertEqual(
+            [
+                'CAA issue tag is present without issuewild; '
+                'add an explicit issuewild to clarify wildcard certificate policy'
+            ],
+            validate(
+                CaaValue,
+                [
+                    {'flags': 0, 'tag': 'issue', 'value': 'letsencrypt.org'},
+                    {
+                        'flags': 128,
+                        'tag': 'iodef',
+                        'value': 'mailto:security@example.com',
+                    },
+                ],
+                'CAA',
+            ),
+        )
+
+        # opt-in via Record.enable_validator
+        zone = Zone('unit.tests.', [])
+        Record.enable_validators(['legacy'])
+        Record.enable_validator('caa-value-best-practice', types=['CAA'])
+        try:
+            with self.assertRaises(ValidationError) as ctx:
+                Record.new(
+                    zone,
+                    '',
+                    {
+                        'type': 'CAA',
+                        'ttl': 600,
+                        'value': {
+                            'flags': 0,
+                            'tag': 'issue',
+                            'value': 'letsencrypt.org',
+                        },
+                    },
+                )
+            self.assertEqual(
+                [
+                    'CAA issue tag is present without issuewild; '
+                    'add an explicit issuewild to clarify wildcard certificate policy'
+                ],
+                ctx.exception.reasons,
+            )
+            # both issue and issuewild passes
+            Record.new(
+                zone,
+                '',
+                {
+                    'type': 'CAA',
+                    'ttl': 600,
+                    'values': [
+                        {
+                            'flags': 0,
+                            'tag': 'issue',
+                            'value': 'letsencrypt.org',
+                        },
+                        {
+                            'flags': 0,
+                            'tag': 'issuewild',
+                            'value': 'letsencrypt.org',
+                        },
+                    ],
+                },
+            )
+        finally:
+            Record.disable_validator('caa-value-best-practice', types=['CAA'])
+
+    def test_best_practice_not_in_defaults(self):
+        registered = Record.registered_validators()
+        caa_value_ids = set(v.id for v in registered['value'].get('CAA', []))
+        self.assertNotIn('caa-value-best-practice', caa_value_ids)
 
 
 class TestCaaValue(TestCase):
