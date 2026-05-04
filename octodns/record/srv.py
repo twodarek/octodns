@@ -8,7 +8,7 @@ from ..equality import EqualityTupleMixin
 from ..idna import idna_encode
 from .base import Record, ValuesMixin, unquote
 from .rr import RrParseError
-from .target import validate_target_fqdn
+from .target import _check_target_format, _check_target_trailing_dot
 from .validator import RecordValidator, ValueValidator
 
 
@@ -57,7 +57,7 @@ class SrvValueValidator(ValueValidator):
                 reasons.append(f'invalid port "{value["port"]}"')
             try:
                 target = value['target']
-                reasons += validate_target_fqdn(target, _type, 'target')
+                reasons += _check_target_format(target, _type, 'target')
             except KeyError:
                 reasons.append('missing target')
         return reasons
@@ -165,10 +165,34 @@ class SrvValueRfcValidator(ValueValidator):
         return reasons
 
 
+class SrvValueBestPracticeValidator(ValueValidator):
+    '''
+    Checks that the SRV ``target`` field ends with a trailing ``.``
+    (fully-qualified name).
+
+    Enabled as part of the ``best-practice`` validator set::
+
+      manager:
+        enabled:
+          - best-practice
+    '''
+
+    def validate(self, value_cls, data, _type):
+        reasons = []
+        for value in data:
+            target = value.get('target')
+            if target:
+                reasons += _check_target_trailing_dot(target, _type, 'target')
+        return reasons
+
+
 class SrvValue(EqualityTupleMixin, dict):
     VALIDATORS = [
         SrvValueValidator('srv-value', sets={'legacy'}),
-        SrvValueRfcValidator('srv-value-rfc', sets={'rfc'}),
+        SrvValueRfcValidator('srv-value-rfc', sets={'strict'}),
+        SrvValueBestPracticeValidator(
+            'srv-value-best-practice', sets={'best-practice'}
+        ),
     ]
 
     @classmethod
@@ -290,7 +314,7 @@ class SrvRecord(ValuesMixin, Record):
     _value_type = SrvValue
     VALIDATORS = [
         SrvNameValidator('srv-name', sets={'legacy'}),
-        SrvNameRfcValidator('srv-name-rfc', sets={'rfc'}),
+        SrvNameRfcValidator('srv-name-rfc', sets={'strict'}),
     ]
 
 

@@ -14,6 +14,7 @@ from octodns.record.srv import (
     SrvNameRfcValidator,
     SrvRecord,
     SrvValue,
+    SrvValueBestPracticeValidator,
     SrvValueRfcValidator,
 )
 from octodns.zone import Zone
@@ -397,25 +398,20 @@ class TestRecordSrv(TestCase):
                 },
             )
         self.assertEqual(['missing target'], ctx.exception.reasons)
-        # invalid target
-        with self.assertRaises(ValidationError) as ctx:
-            Record.new(
-                self.zone,
-                '_srv._tcp',
-                {
-                    'type': 'SRV',
-                    'ttl': 600,
-                    'value': {
-                        'priority': 1,
-                        'weight': 2,
-                        'port': 3,
-                        'target': 'foo.bar.baz',
-                    },
+        # missing trailing . is a best-practice check, not legacy
+        Record.new(
+            self.zone,
+            '_srv._tcp',
+            {
+                'type': 'SRV',
+                'ttl': 600,
+                'value': {
+                    'priority': 1,
+                    'weight': 2,
+                    'port': 3,
+                    'target': 'foo.bar.baz',
                 },
-            )
-        self.assertEqual(
-            ['SRV target "foo.bar.baz" missing trailing .'],
-            ctx.exception.reasons,
+            },
         )
 
         # falsey target
@@ -483,6 +479,95 @@ class TestSrvValue(TestCase):
         got = value.template({'needle': 42})
         self.assertIsNot(value, got)
         self.assertEqual('has_42_placeholder', got.target)
+
+    def test_best_practice_validator(self):
+        validate = SrvValueBestPracticeValidator(
+            'srv-value-best-practice'
+        ).validate
+
+        # target with trailing dot passes
+        self.assertEqual(
+            [],
+            validate(
+                SrvValue,
+                [{'priority': 1, 'weight': 2, 'port': 80, 'target': 'h.u.t.'}],
+                'SRV',
+            ),
+        )
+        # null target "." passes
+        self.assertEqual(
+            [],
+            validate(
+                SrvValue,
+                [{'priority': 0, 'weight': 0, 'port': 0, 'target': '.'}],
+                'SRV',
+            ),
+        )
+        # target missing trailing dot
+        self.assertEqual(
+            ['SRV target "foo.bar.baz" missing trailing .'],
+            validate(
+                SrvValue,
+                [
+                    {
+                        'priority': 1,
+                        'weight': 2,
+                        'port': 80,
+                        'target': 'foo.bar.baz',
+                    }
+                ],
+                'SRV',
+            ),
+        )
+        # missing target — no error (format validator handles presence)
+        self.assertEqual(
+            [],
+            validate(
+                SrvValue, [{'priority': 1, 'weight': 2, 'port': 80}], 'SRV'
+            ),
+        )
+
+        # opt-in via Record.enable_validator
+        zone = Zone('unit.tests.', [])
+        Record.enable_validators(['legacy'])
+        Record.enable_validator('srv-value-best-practice', types=['SRV'])
+        try:
+            with self.assertRaises(ValidationError) as ctx:
+                Record.new(
+                    zone,
+                    '_sip._tcp',
+                    {
+                        'type': 'SRV',
+                        'ttl': 600,
+                        'value': {
+                            'priority': 1,
+                            'weight': 2,
+                            'port': 80,
+                            'target': 'foo.bar.baz',
+                        },
+                    },
+                )
+            self.assertEqual(
+                ['SRV target "foo.bar.baz" missing trailing .'],
+                ctx.exception.reasons,
+            )
+            # trailing dot passes
+            Record.new(
+                zone,
+                '_sip._tcp',
+                {
+                    'type': 'SRV',
+                    'ttl': 600,
+                    'value': {
+                        'priority': 1,
+                        'weight': 2,
+                        'port': 80,
+                        'target': 'foo.bar.baz.',
+                    },
+                },
+            )
+        finally:
+            Record.disable_validator('srv-value-best-practice', types=['SRV'])
 
     def test_rfc_validators_not_in_defaults(self):
         # confirm the RFC validators are opt-in and not registered for SRV

@@ -282,7 +282,7 @@ class ValueValidator:
             tuple)): data = (data,)``.
         _type : str
             The record type string (e.g. ``'MX'``, ``'A'``). Passed
-            through to helpers like ``validate_target_fqdn`` which format
+            through to helpers like ``_check_target_format`` which format
             it into their reason strings.
 
         Returns
