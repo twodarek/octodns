@@ -6,7 +6,12 @@ from unittest import TestCase
 
 from octodns.record import Record
 from octodns.record.base import _process_value_validators
-from octodns.record.ds import DsRecord, DsValue, DsValueRfcValidator
+from octodns.record.ds import (
+    DsRecord,
+    DsValue,
+    DsValueBestPracticeValidator,
+    DsValueRfcValidator,
+)
 from octodns.record.exception import ValidationError
 from octodns.record.rr import RrParseError
 from octodns.zone import Zone
@@ -627,6 +632,233 @@ class TestRecordDs(TestCase):
             )
         finally:
             Record.disable_validator('ds-value-rfc', types=['DS'])
+
+
+class TestDsBestPractice(TestCase):
+
+    def test_best_practice_validator(self):
+        validate = DsValueBestPracticeValidator(
+            'ds-value-best-practice'
+        ).validate
+
+        sha256 = 'a' * 64
+
+        # modern algorithm + SHA-256 digest passes
+        self.assertEqual(
+            [],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 8,
+                        'digest_type': 2,
+                        'digest': sha256,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # Ed25519 algorithm (15) + SHA-256 digest passes
+        self.assertEqual(
+            [],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 15,
+                        'digest_type': 2,
+                        'digest': sha256,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # old-style fields are skipped (deprecated format validator handles them)
+        self.assertEqual(
+            [],
+            validate(
+                DsValue,
+                [
+                    {
+                        'flags': 1234,
+                        'protocol': 3,
+                        'algorithm': 1,
+                        'public_key': 'abc',
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # deprecated algorithm 1 (RSA/MD5)
+        self.assertEqual(
+            ['DS algorithm 1 (RSA/MD5) is deprecated per RFC 8624'],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 1,
+                        'digest_type': 2,
+                        'digest': sha256,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # deprecated algorithm 3 (DSA/SHA1)
+        self.assertEqual(
+            ['DS algorithm 3 (DSA/SHA1) is deprecated per RFC 8624'],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 3,
+                        'digest_type': 2,
+                        'digest': sha256,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # deprecated algorithm 5 (RSA/SHA-1)
+        self.assertEqual(
+            ['DS algorithm 5 (RSA/SHA-1) is deprecated per RFC 8624'],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 5,
+                        'digest_type': 2,
+                        'digest': sha256,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # deprecated algorithm 6 (DSA-NSEC3-SHA1)
+        self.assertEqual(
+            ['DS algorithm 6 (DSA-NSEC3-SHA1) is deprecated per RFC 8624'],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 6,
+                        'digest_type': 2,
+                        'digest': sha256,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # deprecated algorithm 7 (RSASHA1-NSEC3-SHA1)
+        self.assertEqual(
+            ['DS algorithm 7 (RSASHA1-NSEC3-SHA1) is deprecated per RFC 8624'],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 7,
+                        'digest_type': 2,
+                        'digest': sha256,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # digest_type 1 (SHA-1) not recommended
+        self.assertEqual(
+            [
+                'DS digest_type 1 (SHA-1) is not recommended per RFC 8624; '
+                'use digest_type 2 (SHA-256)'
+            ],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 8,
+                        'digest_type': 1,
+                        'digest': 'a' * 40,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # both deprecated algorithm and SHA-1 digest — both reported
+        self.assertEqual(
+            [
+                'DS algorithm 5 (RSA/SHA-1) is deprecated per RFC 8624',
+                'DS digest_type 1 (SHA-1) is not recommended per RFC 8624; '
+                'use digest_type 2 (SHA-256)',
+            ],
+            validate(
+                DsValue,
+                [
+                    {
+                        'key_tag': 1234,
+                        'algorithm': 5,
+                        'digest_type': 1,
+                        'digest': 'a' * 40,
+                    }
+                ],
+                'DS',
+            ),
+        )
+        # missing fields — no error (format validator handles presence)
+        self.assertEqual([], validate(DsValue, [{}], 'DS'))
+
+        # opt-in via Record.enable_validator
+        zone = Zone('unit.tests.', [])
+        Record.enable_validators(['legacy'])
+        Record.enable_validator('ds-value-best-practice', types=['DS'])
+        try:
+            with self.assertRaises(ValidationError) as ctx:
+                Record.new(
+                    zone,
+                    'test',
+                    {
+                        'type': 'DS',
+                        'ttl': 600,
+                        'value': {
+                            'key_tag': 1234,
+                            'algorithm': 5,
+                            'digest_type': 2,
+                            'digest': sha256,
+                        },
+                    },
+                )
+            self.assertEqual(
+                ['DS algorithm 5 (RSA/SHA-1) is deprecated per RFC 8624'],
+                ctx.exception.reasons,
+            )
+            # modern algorithm + SHA-256 passes
+            Record.new(
+                zone,
+                'test',
+                {
+                    'type': 'DS',
+                    'ttl': 600,
+                    'value': {
+                        'key_tag': 1234,
+                        'algorithm': 13,
+                        'digest_type': 2,
+                        'digest': sha256,
+                    },
+                },
+            )
+        finally:
+            Record.disable_validator('ds-value-best-practice', types=['DS'])
+
+    def test_best_practice_not_in_defaults(self):
+        registered = Record.registered_validators()
+        ds_value_ids = set(v.id for v in registered['value'].get('DS', []))
+        self.assertNotIn('ds-value-best-practice', ds_value_ids)
 
 
 class TestDsValue(TestCase):
